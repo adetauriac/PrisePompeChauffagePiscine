@@ -104,7 +104,7 @@ int Screen =1;
 int posMenu = 1;
 
 
-#define timeswitchScreen 10000  //Change Screen after x seconde en auto 
+#define timeswitchScreen 2000  //Change Screen after x seconde en auto 
 #define timeswitchOffScreen 20000  //SwitchOff Screen after x seconde en auto 
 #define timeGetTemp 5000  //Prendre temperature toute les X seconde
 #define NBSCREEN 2  //Nombre d'écran 
@@ -118,6 +118,8 @@ unsigned long  StarTimeLight = 0;
 unsigned long LastTimeGetTemp = 0;
 //unsigned long lastmillis = 0;
 
+
+char* myStrings[]={"Pompe Consigne", "Exterieur Consigne"};
 
 
 // ------------------------------------------------------------------
@@ -394,45 +396,54 @@ void navigation() {
 }
 
 void Menu(){
-    bool exit_loop = false;
+    
     switch (posMenu) {
     case 0:
-      lastPosition = virtualPosition;
-      DisplayTempPompe();
+      DisplayTempPompe(); 
       if ((!digitalRead(PinSW))) {
-         exit_loop = false;
-
-         while (!exit_loop) {
-         display.clearDisplay(); //clean display
-         display.setTextSize(1);
-         display.setCursor(0,0);
-         display.println("Pompe Consigne");
-         if (virtualPosition != lastPosition ) {
-              if  (virtualPosition < lastPosition ) {  //Augmente la temperature
-                Tpc = Tpc+1 ;
-              } else if (virtualPosition > lastPosition ) { //Baisse la temperature
-                if (Tpc < 11) {
-                  Tpc = 10;
-                }
-                Tpc = Tpc -1;
-              }
-              lastPosition = virtualPosition;
-           }
-           display.setCursor(10,15);
-           display.setTextSize(2);
-           display.print(Tpc);
-           display.display(); 
-           if ((!digitalRead(PinSW))) { //Sortire de la boucle 
-            //delay(250);
-            exit_loop = !exit_loop;
-           }
-         
-          }
-      }
+        lastPosition = virtualPosition;
+        Tpc=PutConsigne(Tpc, 0);  //0 pour la pompe
+       }
+  
     break;
     case 1:
       DisplayTempExterne();
+      if ((!digitalRead(PinSW))) {
+        lastPosition = virtualPosition;
+        Tec=PutConsigne(Tec, 1);  //0 pour la temp exterieur
+       }
     break; 
   }
   
+}
+
+float PutConsigne ( float Consigne, int sonde){
+    bool exit_loop = false;
+     while (!exit_loop) {
+     display.clearDisplay(); //clean display
+     display.setTextSize(1);
+     display.setCursor(0,0);
+     display.println(myStrings[sonde]);
+     if (virtualPosition != lastPosition ) {
+          if  (virtualPosition < lastPosition ) {  //Augmente la temperature
+            Consigne = Consigne+1 ;
+          } else if (virtualPosition > lastPosition ) { //Baisse la temperature
+            if (Consigne < 11) {
+              Consigne = 10;
+            }
+            Consigne = Consigne -1;
+          }
+          lastPosition = virtualPosition;
+       }
+       display.setCursor(10,15);
+       display.setTextSize(2);
+       display.print(Consigne);
+       display.display(); 
+       if ((!digitalRead(PinSW))) { //Sortire de la boucle 
+        //delay(250);
+        exit_loop = !exit_loop;
+       }
+     
+      }
+  return Consigne;
 }
