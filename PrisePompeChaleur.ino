@@ -3,7 +3,8 @@
   Pilotage d'une prise pour pompe chauffe haut piscine de type ROOS Solor Control PROFI
        Remplacement de l'electronique par un Arduino Nano
 
-
+Version : 0.1
+Date : 20190601
 
 ************************************************************************************************
 */
@@ -30,6 +31,13 @@ SCL ==> A4
 SDA ==> A5 
 
 
+Interrupteur On - Off - On
+ 1 broche sur D11
+ 1 broche sur D05 
+ 1 masse
+ 
+ 
+
 MICROCONTRÔLEUR
 Clone Arduino Nano
 
@@ -39,6 +47,8 @@ REMARQUES
   pour qu’il se stabilise.
 
 */
+
+float Version = 0.1;
 
 //1wire
 #include <OneWire.h>
@@ -66,7 +76,13 @@ const int Lrouge = 8;  // D8 Indication Temperature Exterieur (Te) consigne atte
 const int Lorange = 7; // D7 indication si process en mode forcé activé ou pas (par interrupteur ou logiciel)
 const int Lverte = 6;  // D6 Indication Temperature Pompe (Tp) consigne atteint ou pas
 
-//Initi OLED
+//Initialisation Bouton On/Off/On
+const int boutonMarcheForce = 11;
+const int boutonMarcheAuto = 5;
+
+
+
+//Initialisation OLED
 #define OLED_RESET 4
 Adafruit_SSD1306 display(OLED_RESET);
 
@@ -100,26 +116,28 @@ float Tp; // Variable pour recuperer temperature Pompe
 float TePrev; // Variable pour stocker la dernière valeur
 float TpPrev; // Variable pour stocker la dernière valeur
 
-int Screen =1;
-int posMenu = 1;
+int Screen =1; // Variable pour identifer les screens ==> A voir pour merger avec Menu ?
+int posMenu = 1; // Variable pour identifier les menus
+int Mode ; //Variable poour savoir sur quel mode la prise est configuré (via interrupteur On-Off-On
 
-
-#define timeswitchScreen 2000  //Change Screen after x seconde en auto 
-#define timeswitchOffScreen 20000  //SwitchOff Screen after x seconde en auto 
-#define timeGetTemp 5000  //Prendre temperature toute les X seconde
-#define NBSCREEN 2  //Nombre d'écran 
-#define NumberMenu 2 // Nombre de Menu 1er niveau
+#define timeswitchScreen 2000  //Change Screen after x milliseconde  en auto 
+#define timeswitchOffScreen 10000  //SwitchOff Screen after x milliseconde  en auto 
+#define timeGetTemp 5000  //Prendre temperature toute les X milliseconde 
+#define timeBetweenStartPompe 1800 //En seconde ici, a en tenir compte dans le reste du programme
+ 
+#define NBSCREEN 3  //Nombre d'écran 
+#define NumberMenu 3 // Nombre de Menu 1er niveau
 
 
 unsigned long  currentTime;
 unsigned long  StarTimeScreen = 0;
 unsigned long  TimeScreen = 0;
-unsigned long  StarTimeLight = 0;
+unsigned long  StarTimeONScreen = 0;
 unsigned long LastTimeGetTemp = 0;
 //unsigned long lastmillis = 0;
 
 
-char* myStrings[]={"Pompe Consigne", "Exterieur Consigne"};
+char* myStrings[]={"Pompe Consigne", "Exterieur Consigne", "Temperature Pompe","Temperature Exterieur"};
 
 
 // ------------------------------------------------------------------
@@ -152,7 +170,8 @@ void isr ()  {
 //*************************************************************************************************
 void setup() {
   Serial.begin( 115200 );
-  Serial.print( "Demo prise pompe v1\n" );
+  Serial.print( "Demo prise pompe version : " );
+  Serial.println(Version);
 
   // Démarre le processus de lecture.
   // IC Default 9 bit. If you have troubles consider upping it 12.
@@ -176,6 +195,7 @@ void setup() {
 
   StarTimeScreen = millis(); //Variable to change screen after x Seconde
   LastTimeGetTemp = millis();
+  StarTimeONScreen=millis(); // Variable pour detecter quand l'écran a été allumé
   
 
  // Rotary pulses are INPUTs
@@ -186,20 +206,37 @@ void setup() {
   // Attach the routine to service the interrupts
   attachInterrupt(digitalPinToInterrupt(PinA), isr, LOW);
 
+ //Config Interrupteur
+  pinMode(boutonMarcheForce, INPUT_PULLUP); 
+  pinMode(boutonMarcheAuto, INPUT_PULLUP); 
+  
 
+  GetTemperature(); //1er initialisation des temperatures
   
 }
 
 void loop() {
-
-
+pinMode(relais, OUTPUT);
+//Recupération des températures toutes les "timeGetTemp" seconde
 if ( millis() -  LastTimeGetTemp > timeGetTemp ){
   GetTemperature();
   LastTimeGetTemp = millis ();
-  
   }
 
-  
+
+//Clean ecran et fix variable pour ne plus afficher les menu, apres "timeswitchOffScreen" secondes
+if (millis() - StarTimeONScreen > timeswitchOffScreen){
+  SwitchOffScreen();
+}
+
+
+//Check état interrupteur
+GetInterrupteur();
+
+
+
+
+
   // Allumer les led verte et rouge en fonction des températures de concigne et de température des sondes, en tenant compte d'une hyteresis de 1°)
 
 //Led Rouge (Temp Externe Te)
@@ -222,58 +259,55 @@ if ( millis() -  LastTimeGetTemp > timeGetTemp ){
   digitalWrite(Lverte, LOW);
   bTpc=false;
  }
-  
-
-
-  
-
 
 
   //Recuperer le mode de fonctionnement 
   //==> To do avec interrupteur et consigne autre ?
-  // Mod = 0 Off
-  // Mod = 1 Auto
-  // Mod = 2 Forcé
-  int Mod = 1;
-  pinMode(relais, OUTPUT);
-
+  // Mode = 0 Off
+  // Mode= 1 Auto
+  // Mode = 2 Forcé
   //Condition pour connaitre le mode de fonctionnement 
-  if (Mod == 2){ //Mode forcé, on allume le relais ==> Prevoir un delais de xx Minute ou heure
-      digitalWrite(relais,HIGH);
+  switch (Mode) {
+    case 0 : //Mode OFF
+      Pompe(false);
+      digitalWrite(Lorange, LOW); // LED Orange OFF
+      break;
+    case 1 : //Mode Auto, appel fonction gestion pompe  
+      if (bTec == true){
+        Pompe(true);
+      }
+      else {
+        Pompe(false);      
+      }
+    break;
+    case 2: //Mode forcé, on allume le relais ==> Prevoir un delais de xx Minute ou heure
+      Pompe(true);
+      //digitalWrite(relais,HIGH);
       digitalWrite(Lorange, HIGH); //allumer LED Orange pour indiquer mode forcé
+     break;
+    default : // Si aucun cas, on éteint la pompe
+      Pompe(false); 
+    break;
+  
   }
 
-  if (Mod == 1){ //Mode auromatique
-
-    if (bTec == true){
-      digitalWrite(relais,HIGH);
-       Serial.println( "Start Pompe" );
-    }
-    else {
-      digitalWrite(relais,LOW);
-      Serial.println( "Stop Pompe" );
-
-      
-    }
-  }
-
-
-  navigation() ;
+  navigation() ; // Verification du mouvement du selecteur afin de naviguer
   if (bDemo == true ){ //Lance le defilement des informations
     Demo();
   }
   else { // Passage dans menu config
     Menu();
-  
   }
-
-
-
 
 }
 
 
-void Demo(){
+//**************************************** END LOOP *******************************************************
+
+
+
+
+void Demo(){ // demo pour affichier en bloucle les informations
   currentTime = millis();  
   if ( millis() -  StarTimeScreen > timeswitchScreen ){
     Screen=Screen+1 ;
@@ -288,13 +322,17 @@ void Demo(){
   
   switch (Screen) {
     case 1:
-      DisplayTempPompe();
+      DisplayTemp(Tp,Tpc,2);
     break;
     case 2:
-      DisplayTempExterne();
+       DisplayTemp(Te,Tec,3);
     break; 
+    case 3 :
+      DisplayRecap();
   }
 }
+
+
 void GetTemperature(){
     // Requête de toutes les températures disponibles sur le bus
   sensors.requestTemperatures();
@@ -334,50 +372,57 @@ void GetTemperature(){
   
 }
 
-void DisplayTempPompe(){
-  // text display tests
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.setCursor(0,0);
-    display.println("Temp Pompe");
-    //display.setTextColor(BLACK, WHITE); // 'inverted' text
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.print("Live     : ");
-    display.print( Tp );
-    display.println(" C");
-    display.print("Consigne : ");
-    display.print( Tpc );
-    display.println(" C");
-    display.display();
 
-}
-
-void DisplayTempExterne(){
+void DisplayTemp(float Live, float Consigne, int message){
     // text display tests
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(WHITE);
     display.setCursor(0,0);
-    display.println("Temp Externe");
+    display.println(myStrings[message]);
     //display.setTextColor(BLACK, WHITE); // 'inverted' text
     display.setTextSize(1);
     display.setTextColor(WHITE);
     display.print("Live     : ");
-    display.print( Te );
+    display.print( Live );
     display.println(" C");
     display.print("Consigne : ");
-    display.print( Tec );
+    display.print( Consigne );
     display.println(" C");
     display.display();
 
 }
 
+void DisplayRecap (){ //Avoir un ecran global des temperature et etat de la prise
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.print("Bilan : ");
+    display.setCursor(50,0);     //(X,Y : Y vers le bas X sur la droite) 
+    display.print("Prise ");
+    display.println(GetPompeEtat());
+    display.setCursor(0,8);
+    display.print("T Pompe : ");
+    display.setCursor(60,8);
+    display.print(Tp);
+    display.setCursor(0,16);
+    display.print("T Externe : ");
+    display.setCursor(60,16);
+    display.print(Te);
+    display.setCursor(0,24);
+    display.print("Mode : ");
+    display.setCursor(60,24);
+    display.print(Mode);
+    display.display();
+    
+    
+}
+
 
 void navigation() { 
   if ( virtualPosition != lastPosition) {
-    StarTimeLight = millis();
+    StarTimeONScreen = millis();
     if  (virtualPosition > lastPosition ) {  //menu suivant
       posMenu = (posMenu + 1 ) % NumberMenu ;
     } else if (virtualPosition < lastPosition ) { //menu precedent
@@ -399,7 +444,8 @@ void Menu(){
     
     switch (posMenu) {
     case 0:
-      DisplayTempPompe(); 
+      //DisplayTempPompe(); 
+      DisplayTemp(Tp,Tpc,2);
       if ((!digitalRead(PinSW))) {
         lastPosition = virtualPosition;
         Tpc=PutConsigne(Tpc, 0);  //0 pour la pompe
@@ -407,19 +453,28 @@ void Menu(){
   
     break;
     case 1:
-      DisplayTempExterne();
+      //DisplayTempExterne();
+      DisplayTemp(Te,Tec,3);
       if ((!digitalRead(PinSW))) {
         lastPosition = virtualPosition;
         Tec=PutConsigne(Tec, 1);  //0 pour la temp exterieur
        }
     break; 
+    
+    case 2: //Affichage récap de la prise
+      DisplayRecap();
+    break;
+    
+    default :
+     SwitchOffScreen();
+    break;
   }
   
 }
 
 float PutConsigne ( float Consigne, int sonde){
     bool exit_loop = false;
-     while (!exit_loop) {
+     while (!exit_loop) { 
      display.clearDisplay(); //clean display
      display.setTextSize(1);
      display.setCursor(0,0);
@@ -435,7 +490,7 @@ float PutConsigne ( float Consigne, int sonde){
           }
           lastPosition = virtualPosition;
        }
-       display.setCursor(10,15);
+       display.setCursor(15,15);
        display.setTextSize(2);
        display.print(Consigne);
        display.display(); 
@@ -445,5 +500,75 @@ float PutConsigne ( float Consigne, int sonde){
        }
      
       }
+  StarTimeONScreen = millis(); //Remise à zero du decompte pour eteindre l'écran afin de revenir sur le menu visible    
   return Consigne;
+}
+
+void SwitchOffScreen(){  //Eteindre l'écran
+  display.clearDisplay();
+  display.display();
+  bDemo=false; //Désacrtiver le modre démo
+  posMenu=99;  //force un menu fictif pour ne pas activer l'affichage
+}
+
+
+void Pompe(bool bconsigne){ //TRUE : Start //False : Stop ==> Pilotage du relais
+  if (bconsigne == true){
+    digitalWrite(relais,HIGH);
+    Serial.println( "Start Pompe" );
+  }
+   if (bconsigne == false){   
+    digitalWrite(relais,LOW);
+    Serial.println( "Stop Pompe" );  
+   }
+}
+
+String GetPompeEtat(){ // Lire l'état de la prise (pompe) 
+  String etat;
+  if (digitalRead(relais) == HIGH ){
+     Serial.println("Prise ON");
+     etat="ON";
+  }
+  if (digitalRead(relais) == LOW ){
+     Serial.println("Prise OFF");
+     etat="OFF";
+  }
+  return etat;
+}
+
+
+void GetInterrupteur (){
+    //Test gestion interrupteur
+  // Mod = 0 Off
+  // Mod = 1 Auto
+  // Mod = 2 Forcé
+//  
+//    if (digitalRead(boutonMarcheForce) == LOW) // Si la broche est LOW (ON activé), faire :
+//    {
+//      Serial.print ("Marche Forcé On  / ");
+//    }
+//    else // sinon, faire :
+//    {
+//      Serial.print ("Marche Forcé Off / ");
+//    }
+//    if (digitalRead(boutonMarcheAuto) == LOW) // Si la broche est LOW, (On Activé) faire :
+//    {
+//      Serial.println ("Marche Auto On");
+//    }
+//    else // sinon, faire :
+//    {
+//      Serial.println ("Marche Auto Off");
+//    }
+
+    if (digitalRead(boutonMarcheForce) == HIGH and digitalRead(boutonMarcheAuto)==HIGH){
+      Mode=0; //Tout est off
+    } 
+    if (digitalRead(boutonMarcheForce) == HIGH and digitalRead(boutonMarcheAuto)==LOW){
+      Mode=1; //On active la marche automatique 
+    }
+    if (digitalRead(boutonMarcheForce) == LOW and digitalRead(boutonMarcheAuto)==HIGH){
+      Mode=2; //On active la marche forcé ==> TO DO ajouter un timer ??
+    }
+
+
 }
